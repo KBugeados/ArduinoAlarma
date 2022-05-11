@@ -1,0 +1,148 @@
+/*
+Alarma Arduino compatible con Alexa y Telegram
+Creado por Bugeados.com
+ */
+
+
+#include <SPI.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <WiFiClient.h>
+#include <ESP8266HTTPClient.h> 
+#include <UniversalTelegramBot.h>
+#include <ArduinoJson.h>
+
+///////please enter your sensitive data in the Secret tab/arduino_secrets.h
+char ssid[] = "XXXXXXXXXXXX";        // your network SSID (name)
+char pass[] = "XXXXXXXXXXXXXXXXXXX";    // your network password (use for WPA, or use as key for WEP)
+int keyIndex = 0;            // your network key index number (needed only for WEP)
+
+char pinnedMessage[] = "Alarma activada";
+String alarm_status = "";
+
+// Initialize Telegram BOT
+#define BOTtoken "XXXXXXXX:XXXXXXXXXXXXXXXXXXXXXXXXXX"  // your Bot Token (Get from Botfather)
+#define CHAT_ID "XXXXXXXXXXXXX"
+#define WEBHOOKSTOKEN "XXXXXXXXXXXXXXXXXX" 
+
+char server[] = "api.telegram.org";    // name address for Google (using DNS)
+char server2[] = "maker.ifttt.com"; //URL to trigger alexa routine
+
+// Initialize the Ethernet client library
+// with the IP address and port of the server
+// that you want to connect to (port 80 is default for HTTP):
+X509List cert(TELEGRAM_CERTIFICATE_ROOT);
+WiFiClientSecure client;
+WiFiClientSecure httpsClient;
+UniversalTelegramBot bot(BOTtoken, client);
+
+void setup() {
+  //Initialize serial and wait for port to open:
+  Serial.begin(9600);
+  client.setTrustAnchors(&cert); // Add root certificate for api.telegram.org
+
+  while (!Serial) {
+    ; // wait for serial port to connect. Needed for native USB port only
+  }
+ 
+  // attempt to connect to WiFi network:
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, pass);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+  Serial.println("\nStarting connection to server...");
+  // if you get a connection, report back via serial:
+  if (client.connect(server, 443)) {
+    Serial.println("connected to server");
+    // Make a HTTP request:
+    String part1 = "GET /bot";
+    String part2 = "/getChat?chat_id=";
+    String part3 = " HTTP/1.1";
+    String all = part1 + BOTtoken + part2 + CHAT_ID + part3;
+    Serial.println(all);
+    client.println(all);
+    client.println("Host: api.telegram.org");
+    client.println("Connection: close");
+    client.println();
+  }
+
+  // Check HTTP status
+  char status[32] = {0};
+  client.readBytesUntil('\r', status, sizeof(status));
+  if (strcmp(status, "HTTP/1.1 200 OK") != 0) {
+    Serial.println(status);
+    Serial.print(F("Unexpected response: "));
+    Serial.println(status);
+    client.stop();
+    return;
+  }
+
+
+    // Skip HTTP headers
+  char endOfHeaders[] = "\r\n\r\n";
+  if (!client.find(endOfHeaders)) {
+    Serial.println(F("Invalid response"));
+    client.stop();
+    return;
+  }
+
+    // Allocate the JSON document
+  // Use arduinojson.org/v6/assistant to compute the capacity.
+  const size_t capacity = 4096;
+  DynamicJsonDocument doc(capacity);
+
+  // Parse JSON object
+  DeserializationError error = deserializeJson(doc, client);
+  if (error) {
+    Serial.print(F("deserializeJson() failed: "));
+    Serial.println(error.f_str());
+    client.stop();
+    return;
+  }
+
+  // Extract values
+  Serial.println(F("Response:"));
+  JsonObject obj = doc["result"]["pinned_message"].as<JsonObject>();
+  String alarm_status = obj[String("text")];
+  Serial.println(alarm_status);
+
+  // Disconnect
+  client.stop();
+
+  // Check alarm status
+  if(alarm_status == pinnedMessage){
+     bot.sendMessage(CHAT_ID, "Puerta abierta", ""); //Telegram message notification
+
+  httpsClient.setInsecure();
+
+  if (httpsClient.connect(server2, 443)) {
+    Serial.println("connected to server");
+    // Make a HTTP request:
+    String spart1 = "GET /trigger/alexa_alarma/json/with/key/";
+    String spart2 = " HTTP/1.1";
+    String sall = spart1 + WEBHOOKSTOKEN + spart2;
+    Serial.println(sall);
+    httpsClient.println(sall);
+    httpsClient.println("Host: maker.ifttt.com");
+    httpsClient.println("Connection: close");
+    httpsClient.println();
+    httpsClient.stop();
+  }else{
+    Serial.println("Problema conectando a servidor");  
+  }    
+  }
+
+  ESP.deepSleep(0); 
+}
+
+void loop() {
+}
